@@ -139,8 +139,14 @@ async function getRuntimeMonitoring() {
       voicePingMs: Number.isFinite(queue.lavalinkPing) ? queue.lavalinkPing : null,
       lastPlayerUpdateAt: queue.lastLavalinkUpdateAt,
     }));
+  let botInstances = [{ id: BOT_INSTANCE_ID, primary: true }];
+  try {
+    const configured = JSON.parse(String(process.env.DISCORD_BOTS || ''));
+    if (Array.isArray(configured) && configured.length) botInstances = configured.map((bot, index) => ({ id: String(bot && bot.id || 'bot-' + (index + 1)), primary: index === 0 }));
+  } catch {}
   return {
     sampledAt: now,
+    botInstances,
     uptimeSeconds: process.uptime(),
     nodeRss: memory.rss,
     nodeHeapUsed: memory.heapUsed,
