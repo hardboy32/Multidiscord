@@ -51,7 +51,9 @@ function loadBotDefinitions() {
     if (used.has(id)) throw new Error('Duplicate bot id in DISCORD_BOTS: ' + id);
     used.add(id);
     if (!token) throw new Error('Bot "' + id + '" is missing its token.');
-    return { id, token, clientId: String(item.clientId || '').trim() || undefined, guildId: String(item.guildId || '').trim() || undefined, ownerId: String(item.ownerId || '').trim() || undefined, legacy: false };
+    const clientId = String(item.clientId || '').trim();
+    if (!/^\\d{17,20}$/.test(clientId)) throw new Error('Bot "' + id + '" needs its own valid clientId (Discord application ID).');
+    return { id, token, clientId, guildId: String(item.guildId || '').trim() || undefined, ownerId: String(item.ownerId || '').trim() || undefined, legacy: false };
   });
 }
 
@@ -73,6 +75,9 @@ function shutdown(code, reason) {
   shuttingDown = true;
   process.exitCode = Number.isInteger(code) ? code : 1;
   if (reason) console.error('[Supervisor] ' + reason);
+  for (const timer of restartTimers.values()) clearTimeout(timer);
+  restartTimers.clear();
+  for (const [id, child] of botProcesses) if (child && child.exitCode !== null) botExited.add(id);
   for (const child of [...botProcesses.values(), javaProcess, cipherProcess]) {
     if (child && child.exitCode === null && !child.killed) {
       try { child.kill('SIGTERM'); } catch (_) {}
@@ -129,10 +134,12 @@ function watchSharedProcess(child, label) {
   });
 }
 
-function startBot(bot, index) {
+const restartTimers = new Map();
+
+function startBot(bot, index, attempt = 0) {
+  if (shuttingDown) return;
   const primary = index === 0;
-  const env = { ...process.env, DISCORD_TOKEN: bot.token };
-  if (bot.clientId) env.DISCORD_CLIENT_ID = bot.clientId;
+  const env = { ...process.env, DISCORD_TOKEN: bot.token, DISCORD_CLIENT_ID: bot.clientId || '' };
   if (bot.guildId) env.DISCORD_GUILD_ID = bot.guildId;
   if (bot.ownerId) env.BOT_OWNER_ID = bot.ownerId;
   env.BOT_INSTANCE_ID = bot.id;
@@ -147,16 +154,36 @@ function startBot(bot, index) {
     env.MUSIC_REQUEST_CLEANUP_FILE = path.join(botData, 'music-request-cleanup.json');
   }
   console.log('[Supervisor] Starting Discord bot "' + bot.id + '"' + (primary ? ' (dashboard owner)' : '') + '.');
+  const startedAt = Date.now();
   const child = spawn(process.execPath, [path.join(__dirname, 'index.js')], { cwd: __dirname, env, stdio: 'inherit' });
   botProcesses.set(bot.id, child);
-  child.once('error', error => {
-    botExited.add(bot.id);
-    shutdown(1, 'Could not start Discord bot "' + bot.id + '": ' + (error.message || error));
-  });
+  let restartScheduled = false;
+  const scheduleRestart = (reason) => {
+    if (restartScheduled) return;
+    restartScheduled = true;
+    if (shuttingDown) {
+      botExited.add(bot.id);
+      finishIfStopped();
+      return;
+    }
+    const nextAttempt = Date.now() - startedAt > 60000 ? 0 : attempt + 1;
+    const delay = Math.min(60000, 2000 * (2 ** Math.min(nextAttempt, 5)));
+    console.error('[Supervisor] Bot "' + bot.id + '" stopped (' + reason + '). Restarting in ' + Math.round(delay / 1000) + 's; other bots will keep running.');
+    const timer = setTimeout(() => {
+      restartTimers.delete(bot.id);
+      startBot(bot, index, nextAttempt);
+    }, delay);
+    restartTimers.set(bot.id, timer);
+    timer.unref?.();
+  };
+  child.once('error', error => scheduleRestart('process error: ' + (error.message || error)));
   child.once('exit', (code, signal) => {
-    botExited.add(bot.id);
-    if (!shuttingDown) shutdown(code === 0 ? 0 : (code == null ? 1 : code), 'Discord bot "' + bot.id + '" exited (code ' + code + ', signal ' + signal + '); stopping the shared services.');
-    else finishIfStopped();
+    if (shuttingDown) {
+      botExited.add(bot.id);
+      finishIfStopped();
+    } else {
+      scheduleRestart('exit code ' + code + ', signal ' + signal);
+    }
   });
 }
 
