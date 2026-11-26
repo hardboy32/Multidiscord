@@ -52,7 +52,7 @@ function loadBotDefinitions() {
     used.add(id);
     if (!token) throw new Error('Bot "' + id + '" is missing its token.');
     const clientId = String(item.clientId || '').trim();
-    if (!/^\\d{17,20}$/.test(clientId)) throw new Error('Bot "' + id + '" needs its own valid clientId (Discord application ID).');
+    if (!/^\d{17,20}$/.test(clientId)) throw new Error('Bot "' + id + '" needs its own valid clientId (Discord application ID).');
     return { id, token, clientId, guildId: String(item.guildId || '').trim() || undefined, ownerId: String(item.ownerId || '').trim() || undefined, legacy: false };
   });
 }
