@@ -57,6 +57,8 @@ const CLOUDFLARE_CHAT_MODEL = (() => {
 const CLOUDFLARE_IMAGE_MODEL = (process.env.CLOUDFLARE_IMAGE_MODEL || '@cf/black-forest-labs/flux-1-schnell').trim();
 const GUILD_ID = (process.env.DISCORD_GUILD_ID || '').trim();
 const WARNINGS_FILE = process.env.WARNINGS_FILE || path.join(__dirname, 'data', 'warnings.json');
+const BOT_INSTANCE_ID = (process.env.BOT_INSTANCE_ID || 'main').trim();
+const BOT_IS_PRIMARY = !/^false$/i.test(String(process.env.BOT_PRIMARY || 'true'));
 
 if (!TOKEN) {
   console.error('Missing DISCORD_TOKEN. Add the bot token in Railway Variables.');
@@ -181,7 +183,7 @@ const queues = new Map();
 const MUSIC_FALLBACK_GIF_URL = 'https://media1.tenor.com/m/VvoXEWzX44EAAAAd/adventure-time.gif';
 const MUSIC_FALLBACK_GIF_FILE = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || '/app/data', 'music-fallback.gif');
 let defaultFallbackGifBufferPromise = null;
-const MUSIC_PANEL_STATE_FILE = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || '/app/data', 'music-panels.json');
+const MUSIC_PANEL_STATE_FILE = process.env.MUSIC_PANEL_STATE_FILE || path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || '/app/data', 'music-panels.json');
 
 function loadMusicPanelState() {
   try {
@@ -208,7 +210,7 @@ function saveMusicPanelState() {
   }
 }
 
-const MUSIC_REQUEST_CLEANUP_FILE = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || '/app/data', 'music-request-cleanup.json');
+const MUSIC_REQUEST_CLEANUP_FILE = process.env.MUSIC_REQUEST_CLEANUP_FILE || path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || '/app/data', 'music-request-cleanup.json');
 const MUSIC_REQUEST_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MUSIC_REQUEST_CLEANUP_CHECK_MS = 5 * 60 * 1000;
 const musicRequestCleanupRunning = new Set();
@@ -2874,7 +2876,9 @@ function startManagedChannelTopicSync(readyClient) {
 client.once(Events.ClientReady, async (readyClient) => {
   logDebug('Runtime process ID:', process.pid);
   logDebug('Logged in as ' + readyClient.user.tag);
-  startDashboard(readyClient, playTrackFromDashboard, playSavedTrackFromDashboard, getDashboardMusicStatus, controlDashboardMusic, async (member) => sendWelcomeMessage(member, getDashboardSettings(member.guild.id).welcome), getRuntimeMonitoring);
+  if (BOT_IS_PRIMARY && !/^true$/i.test(String(process.env.DISABLE_DASHBOARD || 'false'))) {
+    startDashboard(readyClient, playTrackFromDashboard, playSavedTrackFromDashboard, getDashboardMusicStatus, controlDashboardMusic, async (member) => sendWelcomeMessage(member, getDashboardSettings(member.guild.id).welcome), getRuntimeMonitoring);
+  }
   startMusicRequestCleanupScheduler(readyClient);
   startManagedChannelTopicSync(readyClient);
   await initializeMusicRequestPanels(readyClient);
