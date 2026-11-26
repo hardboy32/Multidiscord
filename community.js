@@ -1,0 +1,385 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path');
+const {ActionRowBuilder,AttachmentBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,MessageFlags,PermissionFlagsBits,SlashCommandBuilder,ChannelType}=require('discord.js');
+const FILE=process.env.COMMUNITY_DATA_FILE||'/app/data/community-data.json';
+let db={polls:{},giveaways:{},suggestions:{},verify:{},xp:{},tempvoice:{},economy:{},custom:{},streamAlerts:{},inviteStats:{}};
+function load(){try{db={...db,...JSON.parse(fs.readFileSync(FILE,'utf8'))}}catch(e){if(e.code!=='ENOENT')console.error('Community DB:',e.message)}}
+function save(){try{fs.mkdirSync(path.dirname(FILE),{recursive:true});fs.writeFileSync(FILE+'.tmp',JSON.stringify(db),{encoding:'utf8',mode:0o600});fs.renameSync(FILE+'.tmp',FILE)}catch(e){console.error('Community save:',e.message)}}
+let xpSaveTimer=null;
+function scheduleXpSave(){
+  if(xpSaveTimer)return;
+  xpSaveTimer=setTimeout(()=>{xpSaveTimer=null;save()},1000);
+  xpSaveTimer.unref?.();
+}
+function flushXpSave(){
+  if(!xpSaveTimer)return;
+  clearTimeout(xpSaveTimer);
+  xpSaveTimer=null;
+  save();
+}
+process.once('SIGTERM',()=>{flushXpSave();process.exit(0)});
+process.once('SIGINT',()=>{flushXpSave();process.exit(0)});
+const eph=content=>({content,flags:MessageFlags.Ephemeral});
+const DASHBOARD_SETTINGS_FILE=process.env.DASHBOARD_SETTINGS_FILE||'/app/data/dashboard-settings.json';
+const DASHBOARD_GUILD_ID=(process.env.DASHBOARD_GUILD_ID||'686002315148394502').trim();
+let dashboardSettingsCache={};
+let dashboardSettingsCheckedAt=0;
+function readDashboardSettings(){
+  const now=Date.now();
+  if(now-dashboardSettingsCheckedAt<1000)return dashboardSettingsCache;
+  dashboardSettingsCheckedAt=now;
+  try{dashboardSettingsCache=JSON.parse(fs.readFileSync(DASHBOARD_SETTINGS_FILE,'utf8'))||{}}
+  catch{dashboardSettingsCache={}}
+  return dashboardSettingsCache;
+}
+function dashboardConfig(guildId,key){
+  if(guildId!==DASHBOARD_GUILD_ID)return {};
+  return readDashboardSettings().communityConfig?.[key]||{};
+}
+function featureEnabled(guildId,key){
+  if(guildId!==DASHBOARD_GUILD_ID)return true;
+  return readDashboardSettings().community?.[key]!==false;
+}
+const commandFeatures={poll:'polls',giveaway:'giveaways','giveaway-end':'giveaways','suggest':'suggestions','suggestion-setup':'suggestions','verify-setup':'verification','role-button':'roleButtons',rank:'levels',leaderboard:'levels',daily:'economy',work:'economy',balance:'economy',pay:'economy',shop:'economy',buy:'economy','tempvoice-setup':'tempVoice',invites:'invites','invite-leaderboard':'invites','stream-alert-setup':'streamAlerts','custom-set':'customCommands','custom-run':'customCommands','custom-delete':'customCommands','server-backup':'backup','server-restore':'backup'};
+const isAdmin=i=>i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)||i.memberPermissions?.has(PermissionFlagsBits.Administrator);
+function getCommunityCommands(){return [
+new SlashCommandBuilder().setName('poll').setDescription('Create a poll').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages).addStringOption(o=>o.setName('question').setDescription('Question').setRequired(true).setMaxLength(220)).addStringOption(o=>o.setName('option1').setDescription('Choice 1').setRequired(true).setMaxLength(80)).addStringOption(o=>o.setName('option2').setDescription('Choice 2').setRequired(true).setMaxLength(80)).addStringOption(o=>o.setName('option3').setDescription('Choice 3').setMaxLength(80)).addStringOption(o=>o.setName('option4').setDescription('Choice 4').setMaxLength(80)),
+new SlashCommandBuilder().setName('giveaway').setDescription('Create a giveaway').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true).setMaxLength(180)).addIntegerOption(o=>o.setName('minutes').setDescription('Duration in minutes (or dashboard default)').setRequired(false).setMinValue(1).setMaxValue(10080)).addIntegerOption(o=>o.setName('winners').setDescription('Winner count').setMinValue(1).setMaxValue(10)),
+new SlashCommandBuilder().setName('giveaway-end').setDescription('End a giveaway').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addStringOption(o=>o.setName('message_id').setDescription('Giveaway message ID').setRequired(true)),
+new SlashCommandBuilder().setName('suggestion-setup').setDescription('Set suggestion channel').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addChannelOption(o=>o.setName('channel').setDescription('Channel').setRequired(true).addChannelTypes(ChannelType.GuildText)),
+new SlashCommandBuilder().setName('suggest').setDescription('Submit a suggestion').addStringOption(o=>o.setName('idea').setDescription('Your idea').setRequired(true).setMaxLength(1000)),
+new SlashCommandBuilder().setName('verify-setup').setDescription('Create verification panel').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addChannelOption(o=>o.setName('channel').setDescription('Panel channel (or use dashboard default)').addChannelTypes(ChannelType.GuildText)).addRoleOption(o=>o.setName('role').setDescription('Verified role (or use dashboard default)')),
+new SlashCommandBuilder().setName('role-button').setDescription('Create a self-role button').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addChannelOption(o=>o.setName('channel').setDescription('Panel channel (or use dashboard default)').addChannelTypes(ChannelType.GuildText)).addRoleOption(o=>o.setName('role').setDescription('Toggle role (or use dashboard default)')).addStringOption(o=>o.setName('label').setDescription('Button label (or dashboard default)').setRequired(false).setMaxLength(80)),
+new SlashCommandBuilder().setName('rank').setDescription('Show XP rank').addUserOption(o=>o.setName('user').setDescription('Member')),
+new SlashCommandBuilder().setName('leaderboard').setDescription('Show XP leaderboard'),
+new SlashCommandBuilder().setName('invites').setDescription('Check how many members someone invited').addUserOption(o=>o.setName('user').setDescription('Member to check')),
+new SlashCommandBuilder().setName('invite-leaderboard').setDescription('Show the top inviters in this server'),
+new SlashCommandBuilder().setName('tempvoice-setup').setDescription('Set temporary voice creator').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addChannelOption(o=>o.setName('join_channel').setDescription('Join-to-create channel (or use dashboard default)').addChannelTypes(ChannelType.GuildVoice)).addChannelOption(o=>o.setName('category').setDescription('Optional category').addChannelTypes(ChannelType.GuildCategory))
+
+,new SlashCommandBuilder().setName('daily').setDescription('Claim daily coins')
+,new SlashCommandBuilder().setName('balance').setDescription('Check your wallet').addUserOption(o=>o.setName('user').setDescription('Member'))
+,new SlashCommandBuilder().setName('work').setDescription('Work to earn coins')
+,new SlashCommandBuilder().setName('pay').setDescription('Pay a member').addUserOption(o=>o.setName('user').setDescription('Recipient').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('Coins').setRequired(true).setMinValue(1).setMaxValue(1000000))
+,new SlashCommandBuilder().setName('shop').setDescription('View the server shop')
+,new SlashCommandBuilder().setName('buy').setDescription('Buy an item').addStringOption(o=>o.setName('item').setDescription('Item name').setRequired(true).addChoices({name:'VIP role',value:'vip'},{name:'Color role',value:'color'},{name:'Bonus 500 coins',value:'bonus'}))
+
+,new SlashCommandBuilder().setName('custom-set').setDescription('Create or update a custom response').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addStringOption(o=>o.setName('name').setDescription('Command name (letters, numbers, dash)').setRequired(true).setMaxLength(24)).addStringOption(o=>o.setName('response').setDescription('Response text').setRequired(true).setMaxLength(1800))
+,new SlashCommandBuilder().setName('custom-run').setDescription('Run a saved custom response').addStringOption(o=>o.setName('name').setDescription('Saved command name').setRequired(true).setMaxLength(24))
+,new SlashCommandBuilder().setName('custom-delete').setDescription('Delete a custom response').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addStringOption(o=>o.setName('name').setDescription('Saved command name').setRequired(true).setMaxLength(24))
+,new SlashCommandBuilder().setName('server-backup').setDescription('Export server structure to a JSON backup').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+,new SlashCommandBuilder().setName('server-restore').setDescription('Restore roles and channels from a JSON backup').setDefaultMemberPermissions(PermissionFlagsBits.Administrator).addAttachmentOption(o=>o.setName('file').setDescription('Backup JSON file').setRequired(true))
+
+,new SlashCommandBuilder().setName('stream-alert-setup').setDescription('Configure a creator live notification').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild).addStringOption(o=>o.setName('platform').setDescription('Streaming platform (or dashboard default)').setRequired(false).addChoices({name:'Twitch',value:'twitch'},{name:'YouTube',value:'youtube'},{name:'Kick',value:'kick'})).addStringOption(o=>o.setName('creator').setDescription('Creator username or channel ID (or dashboard default)').setRequired(false).setMaxLength(100)).addChannelOption(o=>o.setName('channel').setDescription('Notification channel (or dashboard default)').setRequired(false).addChannelTypes(ChannelType.GuildText))
+]}
+const giveawayEnding = new Set();
+
+async function finishGiveaway(guild, record, messageId) {
+  const key = guild.id + ':' + messageId;
+  if (record.ended) return { ended: true, message: 'Giveaway not found/already ended.' };
+  if (giveawayEnding.has(key)) return { ended: false, message: 'This giveaway is already being ended.' };
+
+  giveawayEnding.add(key);
+  try {
+    const channel = await guild.channels.fetch(record.channelId).catch(() => null);
+    const message = channel && await channel.messages.fetch(messageId).catch(() => null);
+    if (!message) {
+      record.ended = true;
+      save();
+      return { ended: true, message: 'Giveaway message not found.' };
+    }
+
+    const pool = [...new Set(record.entries || [])];
+    const winners = [];
+    while (pool.length && winners.length < (record.winners || 1)) {
+      winners.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    }
+
+    record.ended = true;
+    record.winnerIds = winners;
+    save();
+
+    await message.edit({
+      embeds: [
+        EmbedBuilder.from(message.embeds[0])
+          .setTitle('Giveaway ended')
+          .setColor(0x747f8d)
+          .setDescription('Prize: ' + record.prize + '\\nWinners: ' + (winners.map(id => '<@' + id + '>').join(', ') || 'No entries')),
+      ],
+      components: [],
+    }).catch(error => console.warn('Giveaway end message update failed:', error.message || error));
+
+    if (winners.length && channel?.isTextBased()) {
+      await channel.send({
+        content: 'Congratulations ' + winners.map(id => '<@' + id + '>').join(', ') + '! You won ' + record.prize + '.',
+        allowedMentions: { users: winners },
+      }).catch(error => console.warn('Giveaway winner announcement failed:', error.message || error));
+    }
+    return { ended: true, message: 'Giveaway ended.' };
+  } finally {
+    giveawayEnding.delete(key);
+  }
+}
+
+async function endGiveaway(interaction, messageId) {
+  const key = interaction.guild.id + ':' + messageId;
+  const record = db.giveaways[key];
+  if (!record || record.ended) return 'Giveaway not found/already ended.';
+  const result = await finishGiveaway(interaction.guild, record, messageId);
+  return result.message;
+}
+async function replyCommunity(interaction, payload) {
+  if (interaction.deferred) {
+    const { flags, ...options } = payload || {};
+    return interaction.editReply(options);
+  }
+  if (interaction.replied) return interaction.followUp(payload);
+  return interaction.reply(payload);
+}
+
+async function handleCommunityInteraction(i){
+if(!i.guild)return false;
+if(i.isChatInputCommand()){
+const n=i.commandName;
+const networkCommands=new Set(['poll','giveaway','suggestion-setup','suggest','verify-setup','role-button','buy','custom-run','stream-alert-setup','tempvoice-setup']);
+if(networkCommands.has(n)&&!i.deferred&&!i.replied)await i.deferReply({flags:MessageFlags.Ephemeral});
+const managerOnlyCommands=new Set(['giveaway','suggestion-setup','verify-setup','role-button','custom-set','custom-delete','server-backup','stream-alert-setup','tempvoice-setup']);
+if(managerOnlyCommands.has(n)&&!isAdmin(i)){await replyCommunity(i,eph('Manage Server permission is required for this command.'));return true;}
+if(n==='poll'&&!i.memberPermissions?.has(PermissionFlagsBits.ManageMessages)){await replyCommunity(i,eph('Manage Messages permission is required to create polls.'));return true;}
+const feature=commandFeatures[n];
+if(feature&&!featureEnabled(i.guild.id,feature)){await replyCommunity(i,eph('This feature is currently disabled in the dashboard.'));return true;}
+if(n==='poll'){const cfg=dashboardConfig(i.guild.id,'polls');const target=cfg.channelId?await i.guild.channels.fetch(cfg.channelId).catch(()=>null):i.channel;const opts=['option1','option2','option3','option4'].map(x=>i.options.getString(x)).filter(Boolean);if(opts.length>(cfg.maxOptions||4))return replyCommunity(i,eph('This poll allows up to '+(cfg.maxOptions||4)+' options according to dashboard settings.'));if(new Set(opts.map(x=>x.toLowerCase())).size!==opts.length)return replyCommunity(i,eph('Choices must be unique.'));const id=Date.now().toString(36),endsAt=cfg.defaultDurationMinutes>0?Date.now()+cfg.defaultDurationMinutes*60000:0;db.polls[i.guild.id+':'+id]={opts,votes:{},endsAt,closed:false};save();const buttons=opts.map((x,j)=>new ButtonBuilder().setCustomId('cm:poll:'+id+':'+j).setLabel(x).setStyle(ButtonStyle.Secondary));const rows=[];for(let j=0;j<buttons.length;j+=5)rows.push(new ActionRowBuilder().addComponents(buttons.slice(j,j+5)));const m=await (target?.isTextBased()?target:i.channel).send({embeds:[new EmbedBuilder().setTitle(i.options.getString('question',true)).setColor(0x5865f2).setDescription(opts.map((x,j)=>(j+1)+'. '+x).join('\n'))],components:rows});db.polls[i.guild.id+':'+id].messageId=m.id;db.polls[i.guild.id+':'+id].channelId=m.channelId;save();return replyCommunity(i,eph('Poll posted.'))}
+if(n==='giveaway'){const cfg=dashboardConfig(i.guild.id,'giveaways'),prize=i.options.getString('prize',true),minutes=i.options.getInteger('minutes')||cfg.defaultDurationMinutes||60,winners=i.options.getInteger('winners')||cfg.defaultWinners||1,end=Date.now()+minutes*60000,target=cfg.channelId?await i.guild.channels.fetch(cfg.channelId).catch(()=>null):i.channel;const m=await (target?.isTextBased()?target:i.channel).send({embeds:[new EmbedBuilder().setTitle('🎉 Giveaway').setColor(0xf1c40f).setDescription('Prize: **'+prize+'**\nWinners: '+winners+'\nEnds <t:'+Math.floor(end/1000)+':R>')],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cm:giveaway').setLabel(cfg.entryButtonLabel||'Enter').setEmoji('🎉').setStyle(ButtonStyle.Success))]});db.giveaways[i.guild.id+':'+m.id]={prize,winners,endsAt:end,entries:[],channelId:m.channelId,ended:false};save();return replyCommunity(i,eph('Giveaway created. Winners will be drawn automatically when the timer expires.'))}
+if(n==='giveaway-end'){if(!isAdmin(i))return replyCommunity(i,eph('Manage Server required.'));await i.deferReply({flags:MessageFlags.Ephemeral});const result=await endGiveaway(i,i.options.getString('message_id',true));return i.editReply(result)}
+if(n==='suggestion-setup'){const cfg=dashboardConfig(i.guild.id,'suggestions'),c=i.options.getChannel('channel')||(cfg.channelId&&await i.guild.channels.fetch(cfg.channelId).catch(()=>null));if(!c)return replyCommunity(i,eph('Choose a suggestion channel in the dashboard or command.'));db.suggestions[i.guild.id]=c.id;save();return replyCommunity(i,eph('Suggestion channel set.'))}
+if(n==='suggest'){const cfg=dashboardConfig(i.guild.id,'suggestions'),id=cfg.channelId||db.suggestions[i.guild.id],c=id&&await i.guild.channels.fetch(id).catch(()=>null);if(!c?.isTextBased())return replyCommunity(i,eph('Admin must configure /suggestion-setup first.'));const m=await c.send({embeds:[new EmbedBuilder().setTitle(cfg.title||'New suggestion').setDescription(i.options.getString('idea',true)).addFields({name:'Status',value:'Pending'},...(cfg.allowAnonymous?[]:[{name:'By',value:i.user.toString()}]))],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cm:suggest:approve').setLabel('Approve').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('cm:suggest:reject').setLabel('Reject').setStyle(ButtonStyle.Danger))]});return replyCommunity(i,eph('Suggestion submitted: '+m.url))}
+if(n==='verify-setup'||n==='role-button'){const cfg=dashboardConfig(i.guild.id,n==='verify-setup'?'verification':'roleButtons'),c=i.options.getChannel('channel')||(cfg.channelId&&await i.guild.channels.fetch(cfg.channelId).catch(()=>null)),role=i.options.getRole('role')||(cfg.roleId&&await i.guild.roles.fetch(cfg.roleId).catch(()=>null));if(!c||!role)return replyCommunity(i,eph('Configure the channel and role in the dashboard or select them in this command.'));if(role.managed||role.position>=i.guild.members.me.roles.highest.position)return replyCommunity(i,eph('Move the bot role above the selected role.'));if(n==='verify-setup'){db.verify[i.guild.id]=role.id;save();await c.send({embeds:[new EmbedBuilder().setTitle(cfg.title||'Server verification').setDescription(cfg.description||'Press below to verify and receive access.')],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cm:verify').setLabel(cfg.buttonLabel||'Verify me').setEmoji('✅').setStyle(ButtonStyle.Success))]})}else await c.send({content:cfg.description||('Press to toggle '+role.name),components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cm:role:'+role.id).setLabel(i.options.getString('label')||cfg.label||'Get role').setStyle(ButtonStyle.Primary))]});return replyCommunity(i,eph('Panel posted.'))}
+if(n==='rank'||n==='leaderboard'){const g=db.xp[i.guild.id]||{},entries=Object.entries(g).sort((a,b)=>b[1].xp-a[1].xp);if(n==='rank'){const u=i.options.getUser('user')||i.user,x=g[u.id]?.xp||0,l=Math.floor(Math.sqrt(x/100));return replyCommunity(i,{embeds:[new EmbedBuilder().setTitle(u.username+' — Level '+l).setDescription('XP: '+x+' | Next level in '+(((l+1)**2*100)-x)+' XP')]})}return replyCommunity(i,{embeds:[new EmbedBuilder().setTitle('XP Leaderboard').setDescription(entries.slice(0,10).map((x,j)=>(j+1)+'. <@'+x[0]+'> — '+x[1].xp+' XP').join('\n')||'No XP yet.')]})}
+
+if(n==='daily'||n==='work'||n==='balance'||n==='pay'||n==='shop'||n==='buy'){
+const cfg=dashboardConfig(i.guild.id,'economy');const g=db.economy[i.guild.id]||(db.economy[i.guild.id]={users:{},lastDaily:{},items:{vip:2500,color:1200,bonus:800}});g.items={...g.items,vip:cfg.vipPrice??g.items.vip,color:cfg.colorPrice??g.items.color,bonus:cfg.bonusPrice??g.items.bonus};
+const wallet=id=>g.users[id]||(g.users[id]={coins:0});
+if(n==='balance'){const u=i.options.getUser('user')||i.user;return replyCommunity(i,eph(u.username+' has '+wallet(u.id).coins+' coins.'))}
+if(n==='daily'){const last=g.lastDaily[i.user.id]||0;if(Date.now()-last<86400000)return replyCommunity(i,eph('Daily reward already claimed. Try again <t:'+Math.floor((last+86400000)/1000)+':R>.'));g.lastDaily[i.user.id]=Date.now();wallet(i.user.id).coins+=(cfg.dailyReward??500);save();return replyCommunity(i,eph('Daily reward: +'+(cfg.dailyReward??500)+' coins. Balance: '+wallet(i.user.id).coins))}
+if(n==='work'){const low=cfg.workMin??100,high=Math.max(low,cfg.workMax??300),amount=low+Math.floor(Math.random()*(high-low+1));wallet(i.user.id).coins+=amount;save();return replyCommunity(i,eph('You earned '+amount+' coins. Balance: '+wallet(i.user.id).coins))}
+if(n==='pay'){const u=i.options.getUser('user'),amount=i.options.getInteger('amount');if(u.bot||u.id===i.user.id)return replyCommunity(i,eph('Choose another human member.'));if(wallet(i.user.id).coins<amount)return replyCommunity(i,eph('Not enough coins.'));wallet(i.user.id).coins-=amount;wallet(u.id).coins+=amount;save();return replyCommunity(i,eph('Paid '+amount+' coins to '+u.username+'.'))}
+if(n==='shop')return replyCommunity(i,{embeds:[new EmbedBuilder().setTitle('Server Shop').setDescription('VIP role — '+g.items.vip+' coins\nColor role — '+g.items.color+' coins\n'+(cfg.bonusCoins??500)+' bonus coins — '+g.items.bonus+' coins\nUse /buy to purchase.')]});
+if(n==='buy'){const item=i.options.getString('item'),price=g.items[item];if(wallet(i.user.id).coins<price)return replyCommunity(i,eph('Not enough coins.'));if(item==='bonus'){wallet(i.user.id).coins-=price;wallet(i.user.id).coins+=(cfg.bonusCoins??500);save();return replyCommunity(i,eph('Bonus purchased.'))}const roleName=item==='vip'?'VIP':'Color';let role=i.guild.roles.cache.find(r=>r.name===roleName);if(!role)role=await i.guild.roles.create({name:roleName,reason:'Community shop role'});if(role.position>=i.guild.members.me.roles.highest.position)return replyCommunity(i,eph('Bot role must be above shop roles.'));const buyer=await i.guild.members.fetch(i.user.id).catch(()=>null);if(!buyer)return replyCommunity(i,eph('Could not load your server member record.'));await buyer.roles.add(role);wallet(i.user.id).coins-=price;save();return replyCommunity(i,eph('Purchased '+roleName+' role.'))}
+}
+
+if(n==='custom-set'){const cfg=dashboardConfig(i.guild.id,'customCommands'),name=i.options.getString('name',true).toLowerCase();if(!/^[a-z0-9-]+$/.test(name))return replyCommunity(i,eph('Use only lowercase letters, numbers and dashes.'));const g=db.custom[i.guild.id]||(db.custom[i.guild.id]={});if(!g[name]&&Object.keys(g).length>=(cfg.maxCommands??50))return replyCommunity(i,eph('The dashboard command limit has been reached.'));g[name]=i.options.getString('response',true);save();return replyCommunity(i,eph('Custom response saved. Members can use /custom-run name:'+name+'.'))}
+if(n==='custom-run'){const cfg=dashboardConfig(i.guild.id,'customCommands');if(cfg.allowEveryone===false&&!isAdmin(i))return replyCommunity(i,eph('Only server managers can run custom commands.'));const name=i.options.getString('name',true).toLowerCase(),v=db.custom[i.guild.id]?.[name];if(!v)return replyCommunity(i,eph('Custom response not found.'));if(cfg.defaultChannelId){const target=await i.guild.channels.fetch(cfg.defaultChannelId).catch(()=>null);if(target?.isTextBased()){await target.send({content:v,allowedMentions:{parse:[]}});return replyCommunity(i,eph('Custom response posted in '+target.toString()+'.'))}}return replyCommunity(i,{content:v,allowedMentions:{parse:[]}})}
+if(n==='custom-delete'){const name=i.options.getString('name',true).toLowerCase(),g=db.custom[i.guild.id]||{};if(!g[name])return replyCommunity(i,eph('Custom response not found.'));delete g[name];save();return replyCommunity(i,eph('Custom response deleted.'))}
+if(n==='server-backup'){const cfg=dashboardConfig(i.guild.id,'backup'),backup={version:1,server:{name:i.guild.name,roles:cfg.includeRoles===false?[]:i.guild.roles.cache.filter(r=>!r.managed&&r.id!==i.guild.id).map(r=>({name:r.name,color:r.hexColor,hoist:r.hoist,mentionable:r.mentionable,permissions:r.permissions.bitfield.toString()})),channels:cfg.includeChannels===false?[]:i.guild.channels.cache.map(c=>({name:c.name,type:c.type,parent:c.parentId,topic:c.topic,nsfw:c.nsfw,rateLimitPerUser:c.rateLimitPerUser,position:c.rawPosition,...(cfg.includeOverwrites?{overwrites:c.permissionOverwrites?.cache?.map(o=>({id:o.id,type:o.type,allow:o.allow.bitfield.toString(),deny:o.deny.bitfield.toString()}))}: {})}))}};const file=new AttachmentBuilder(Buffer.from(JSON.stringify(backup,null,2)),{name:'server-backup-'+i.guild.id+'.json'});return replyCommunity(i,{content:'Server structure backup exported. Messages and member assignments are not included.',files:[file],flags:MessageFlags.Ephemeral})}
+if(n==='server-restore'){if(!i.memberPermissions?.has(PermissionFlagsBits.Administrator))return replyCommunity(i,eph('Administrator permission is required to restore a server backup.'));const a=i.options.getAttachment('file',true);if(!a.name.endsWith('.json'))return replyCommunity(i,eph('Upload a JSON backup file.'));await i.deferReply({flags:MessageFlags.Ephemeral});try{const response=await fetch(a.url,{signal:AbortSignal.timeout(15000)});if(!response.ok)throw new Error('Download failed');const b=await response.json();if(b.version!==1||!Array.isArray(b.server?.roles)||!Array.isArray(b.server?.channels))throw new Error('Invalid backup format');let roles=0,channels=0;for(const r of b.server.roles){if(i.guild.roles.cache.some(x=>x.name===r.name))continue;try{await i.guild.roles.create({name:r.name,color:r.color,hoist:r.hoist,mentionable:r.mentionable,permissions:BigInt(r.permissions),reason:'Server structure restore'});roles++}catch(e){}}for(const c of b.server.channels){if(i.guild.channels.cache.some(x=>x.name===c.name&&x.type===c.type))continue;try{await i.guild.channels.create({name:c.name,type:c.type,topic:c.topic||undefined,nsfw:!!c.nsfw,rateLimitPerUser:c.rateLimitPerUser||0,reason:'Server structure restore'});channels++}catch(e){}}return i.editReply('Restore finished. Created '+roles+' roles and '+channels+' channels. Existing names were skipped; category nesting and permission overwrites are not restored automatically.')}catch(e){return i.editReply('Could not restore backup: '+e.message)}}
+if(n==='invites'||n==='invite-leaderboard'){const g=db.inviteStats[i.guild.id]||{};if(n==='invites'){const u=i.options.getUser('user')||i.user;return replyCommunity(i,eph(u.username+' has invited '+(g[u.id]?.total||0)+' member(s).'))}const top=Object.entries(g).sort((a,b)=>b[1].total-a[1].total).slice(0,10);return replyCommunity(i,{embeds:[new EmbedBuilder().setTitle('Invite leaderboard').setDescription(top.map((x,j)=>(j+1)+'. <@'+x[0]+'> — '+x[1].total).join('\n')||'No tracked invites yet.')]})}
+if(n==='stream-alert-setup'){const cfg=dashboardConfig(i.guild.id,'streamAlerts'),platform=i.options.getString('platform')||cfg.platform,creator=(i.options.getString('creator')||cfg.creator||'').trim().replace(/^@/,''),channel=i.options.getChannel('channel')||(cfg.defaultChannelId&&await i.guild.channels.fetch(cfg.defaultChannelId).catch(()=>null));if(!platform||!creator||!channel?.isTextBased())return replyCommunity(i,eph('Set platform, creator and alert channel in the dashboard or in this command.'));const list=db.streamAlerts[i.guild.id]||(db.streamAlerts[i.guild.id]=[]);const old=list.find(x=>x.platform===platform&&x.creator.toLowerCase()===creator.toLowerCase());if(old){old.channelId=channel.id}else list.push({platform,creator,channelId:channel.id,lastLiveId:null});save();return replyCommunity(i,eph('Live notifications configured for '+platform+': '+creator+'. The bot checks periodically; platform API access may require Railway secrets.'))}
+if(n==='tempvoice-setup'){const cfg=dashboardConfig(i.guild.id,'tempVoice'),c=i.options.getChannel('join_channel')||(cfg.creatorChannelId&&await i.guild.channels.fetch(cfg.creatorChannelId).catch(()=>null)),cat=i.options.getChannel('category')||(cfg.categoryId&&await i.guild.channels.fetch(cfg.categoryId).catch(()=>null));if(!c)return replyCommunity(i,eph('Choose the creator voice channel in the dashboard or command.'));db.tempvoice[i.guild.id]={channelId:c.id,categoryId:cat?.id||null};save();return replyCommunity(i,eph('Temporary voice creator configured.'))}
+}
+if(i.isButton()&&i.customId.startsWith('cm:')){const p=i.customId.split(':');const buttonFeatures={poll:'polls',giveaway:'giveaways',suggest:'suggestions',verify:'verification',role:'roleButtons'};if(buttonFeatures[p[1]]&&!i.deferred&&!i.replied)await i.deferReply({flags:MessageFlags.Ephemeral});if(buttonFeatures[p[1]]&&!featureEnabled(i.guild.id,buttonFeatures[p[1]]))return replyCommunity(i,eph('This feature is currently disabled in the dashboard.'));if(p[1]==='verify'||p[1]==='role'){const rid=p[1]==='verify'?db.verify[i.guild.id]:p[2],r=rid&&i.guild.roles.cache.get(rid);if(!r||r.managed||r.position>=i.guild.members.me.roles.highest.position)return replyCommunity(i,eph('Role unavailable; check bot role hierarchy.'));const member=await i.guild.members.fetch(i.user.id).catch(()=>null);if(!member)return replyCommunity(i,eph('Could not load your server member record.'));if(member.roles.cache.has(r.id)){await member.roles.remove(r);return replyCommunity(i,eph('Role removed.'))}await member.roles.add(r);return replyCommunity(i,eph('Role added.'))}
+if(p[1]==='poll'){const r=db.polls[i.guild.id+':'+p[2]],v=Number(p[3]),cfg=dashboardConfig(i.guild.id,'polls');if(!r||r.closed||(r.endsAt&&Date.now()>r.endsAt)||!r.opts[v])return replyCommunity(i,eph('Poll unavailable.'));if(cfg.allowVoteChange===false&&r.votes[i.user.id]!==undefined)return replyCommunity(i,eph('Changing your vote is disabled for this poll.'));r.votes[i.user.id]=v;save();const counts=r.opts.map((_,j)=>Object.values(r.votes).filter(x=>x===j).length),total=counts.reduce((a,b)=>a+b,0);await i.message.edit({embeds:[EmbedBuilder.from(i.message.embeds[0]).setDescription(r.opts.map((x,j)=>x+' — '+counts[j]+' ('+(total?Math.round(counts[j]*100/total):0)+'%)').join('\n'))]});return replyCommunity(i,eph('Vote saved.'))}
+if(p[1]==='giveaway'){const r=db.giveaways[i.guild.id+':'+i.message.id];if(!r||r.ended||Date.now()>r.endsAt)return replyCommunity(i,eph('Giveaway ended.'));const requiredRole=dashboardConfig(i.guild.id,'giveaways').requiredRoleId;if(requiredRole){const member=await i.guild.members.fetch(i.user.id).catch(()=>null);if(!member||!member.roles.cache.has(requiredRole))return replyCommunity(i,eph('You need the required role to enter this giveaway.'));}const j=r.entries.indexOf(i.user.id);if(j>=0)r.entries.splice(j,1);else r.entries.push(i.user.id);save();return replyCommunity(i,eph(j>=0?'Entry removed.':'You entered!'))}
+if(p[1]==='suggest'){const cfg=dashboardConfig(i.guild.id,'suggestions');let hasReviewerRole=false;if(cfg.reviewerRoleId){const member=await i.guild.members.fetch(i.user.id).catch(()=>null);hasReviewerRole=Boolean(member?.roles.cache.has(cfg.reviewerRoleId));}const allowed=isAdmin(i)||hasReviewerRole;if(!allowed)return replyCommunity(i,eph('Reviewer role or Manage Server permission required.'));const e=EmbedBuilder.from(i.message.embeds[0]);e.spliceFields(0,1,{name:'Status',value:p[2]==='approve'?(cfg.approvedMessage||'Approved'):(cfg.rejectedMessage||'Rejected')});await i.message.edit({embeds:[e],components:[]});return replyCommunity(i,eph('Suggestion updated.'))}}
+return false}
+async function checkStreamAlerts(client) {
+  for (const [guildId, items] of Object.entries(db.streamAlerts || {})) {
+    if (!Array.isArray(items) || !featureEnabled(guildId, 'streamAlerts')) continue;
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) continue;
+
+    for (const item of items) {
+      try {
+        let live = null;
+        if (item.platform === 'twitch' && process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET) {
+          if (!client._twitchToken || client._twitchToken.expires < Date.now()) {
+            const tokenResponse = await fetch('https://id.twitch.tv/oauth2/token', {
+              method: 'POST',
+              headers: { 'content-type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                client_id: process.env.TWITCH_CLIENT_ID,
+                client_secret: process.env.TWITCH_CLIENT_SECRET,
+                grant_type: 'client_credentials',
+              }),
+              signal: AbortSignal.timeout(12000),
+            });
+            if (!tokenResponse.ok) throw new Error('Twitch token endpoint returned HTTP ' + tokenResponse.status);
+            const token = await tokenResponse.json();
+            if (token.access_token) {
+              client._twitchToken = {
+                value: token.access_token,
+                expires: Date.now() + (token.expires_in || 3600) * 1000 - 60000,
+              };
+            }
+          }
+          if (client._twitchToken) {
+            const response = await fetch(
+              'https://api.twitch.tv/helix/streams?user_login=' + encodeURIComponent(item.creator),
+              {
+                headers: {
+                  'Client-Id': process.env.TWITCH_CLIENT_ID,
+                  Authorization: 'Bearer ' + client._twitchToken.value,
+                },
+                signal: AbortSignal.timeout(12000),
+              }
+            );
+            if (!response.ok) throw new Error('Twitch streams endpoint returned HTTP ' + response.status);
+            const result = await response.json();
+            if (result.data?.[0]) {
+              live = {
+                id: result.data[0].id,
+                title: result.data[0].title,
+                url: 'https://twitch.tv/' + item.creator,
+              };
+            }
+          }
+        } else if (item.platform === 'kick') {
+          const response = await fetch(
+            'https://kick.com/api/v2/channels/' + encodeURIComponent(item.creator),
+            { headers: { 'user-agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) }
+          );
+          if (!response.ok) throw new Error('Kick channel endpoint returned HTTP ' + response.status);
+          const result = await response.json();
+          if (result.livestream) {
+            live = {
+              id: String(result.livestream.id),
+              title: result.livestream.session_title || 'Live now',
+              url: 'https://kick.com/' + item.creator,
+            };
+          }
+        } else if (item.platform === 'youtube' && process.env.YOUTUBE_API_KEY) {
+          const query = new URLSearchParams({
+            part: 'snippet',
+            type: 'video',
+            eventType: 'live',
+            q: item.creator,
+            maxResults: '1',
+            key: process.env.YOUTUBE_API_KEY,
+          });
+          const response = await fetch('https://www.googleapis.com/youtube/v3/search?' + query, {
+            signal: AbortSignal.timeout(12000),
+          });
+          if (!response.ok) throw new Error('YouTube search endpoint returned HTTP ' + response.status);
+          const result = await response.json();
+          if (result.items?.[0]) {
+            live = {
+              id: result.items[0].id.videoId,
+              title: result.items[0].snippet.title,
+              url: 'https://youtube.com/watch?v=' + result.items[0].id.videoId,
+            };
+          }
+        }
+
+        if (live && live.id !== item.lastLiveId) {
+          const channel = await guild.channels.fetch(item.channelId).catch(() => null);
+          if (!channel?.isTextBased()) {
+            console.warn('Stream alert skipped: notification channel is unavailable for', item.platform, item.creator);
+            continue;
+          }
+          const template = dashboardConfig(guildId, 'streamAlerts').messageTemplate ||
+            '🔴 **{creator} is live on {platform}!**\n{title}\n{url}';
+          const content = String(template)
+            .replaceAll('{creator}', item.creator)
+            .replaceAll('{platform}', item.platform)
+            .replaceAll('{title}', live.title)
+            .replaceAll('{url}', live.url);
+          await channel.send({ content, allowedMentions: { parse: [] } });
+          item.lastLiveId = live.id;
+          save();
+        } else if (!live && item.lastLiveId) {
+          item.lastLiveId = null;
+          save();
+        }
+      } catch (error) {
+        console.warn('Stream alert check failed:', item.platform, item.creator, error.message || error);
+      }
+    }
+  }
+}
+
+async function processScheduledGiveaways(client) {
+  for (const [key, record] of Object.entries(db.giveaways || {})) {
+    if (record.ended || !record.endsAt || Date.now() < record.endsAt || giveawayEnding.has(key)) continue;
+    const [guildId, messageId] = key.split(':');
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) continue;
+    await finishGiveaway(guild, record, messageId);
+  }
+}
+const pollEnding = new Set();
+
+async function processScheduledPolls(client) {
+  for (const [key, record] of Object.entries(db.polls || {})) {
+    if (!record.endsAt || record.closed || Date.now() < record.endsAt || pollEnding.has(key)) continue;
+    const [guildId] = key.split(':');
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) continue;
+
+    pollEnding.add(key);
+    try {
+      const channel = record.channelId
+        ? await guild.channels.fetch(record.channelId).catch(() => null)
+        : null;
+      const message = channel && record.messageId
+        ? await channel.messages.fetch(record.messageId).catch(() => null)
+        : null;
+      record.closed = true;
+      save();
+      if (message) {
+        await message.edit({
+          embeds: [EmbedBuilder.from(message.embeds[0]).setTitle((message.embeds[0]?.title || 'Poll') + ' — Closed')],
+          components: [],
+        }).catch(error => console.warn('Poll close message update failed:', error.message || error));
+      }
+    } finally {
+      pollEnding.delete(key);
+    }
+  }
+}
+
+function attachCommunityModules(client){
+  load();
+  const inviteCache = new Map();
+  let streamCheckRunning = false;
+  client.once('clientReady', async () => {
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        inviteCache.set(guild.id, await guild.invites.fetch());
+      } catch (error) {
+        console.warn('Invite tracking unavailable in', guild.id, error.message || error);
+      }
+    }
+
+    const configuredIntervals = [...client.guilds.cache.keys()].map(guildId => {
+      const value = Number(dashboardConfig(guildId, 'streamAlerts').checkIntervalSeconds) || 120;
+      return Math.max(60, Math.min(600, value));
+    });
+    const streamSeconds = configuredIntervals.length ? Math.min(...configuredIntervals) : 120;
+    const runStreamCheck = async () => {
+      if (streamCheckRunning) return;
+      streamCheckRunning = true;
+      try {
+        await checkStreamAlerts(client);
+      } catch (error) {
+        console.warn('Stream poller:', error.message || error);
+      } finally {
+        streamCheckRunning = false;
+      }
+    };
+    const streamPoller = setInterval(() => { void runStreamCheck(); }, streamSeconds * 1000);
+    streamPoller.unref?.();
+    setTimeout(() => { void runStreamCheck(); }, 30000).unref?.();
+  });client.on('inviteCreate',async invite=>{try{const current=await invite.guild.invites.fetch();inviteCache.set(invite.guild.id,current)}catch(e){}});client.on('guildMemberAdd',async member=>{if(!featureEnabled(member.guild.id,'invites'))return;try{const before=inviteCache.get(member.guild.id);const after=await member.guild.invites.fetch();inviteCache.set(member.guild.id,after);if(!before)return;const used=after.find(x=>(x.uses||0)>(before.get(x.code)?.uses||0));if(used&&used.inviter){const g=db.inviteStats[member.guild.id]||(db.inviteStats[member.guild.id]={}),u=g[used.inviter.id]||(g[used.inviter.id]={total:0,joins:[]});u.total++;u.joins.push({userId:member.id,code:used.code,at:Date.now()});save();const cfg=dashboardConfig(member.guild.id,'invites');if(cfg.announceJoins){const ch=cfg.logChannelId?await member.guild.channels.fetch(cfg.logChannelId).catch(()=>null):null;if(ch?.isTextBased())await ch.send({content:String(cfg.messageTemplate||'{user} joined using an invite from {inviter}.').replaceAll('{user}',member.user.toString()).replaceAll('{inviter}',used.inviter.toString()).replaceAll('{code}',used.code),allowedMentions:{users:[member.id],parse:[]}}).catch(()=>{})}}}catch(e){console.warn('Invite attribution failed:',e.message)}});async function awardXp(guild,user,amount,sourceChannel){if(!guild||!user||user.bot||!featureEnabled(guild.id,'levels'))return false;const g=db.xp[guild.id]||(db.xp[guild.id]={}),u=g[user.id]||(g[user.id]={xp:0,last:0});const oldLevel=Math.floor(Math.sqrt(u.xp/100));u.xp=Math.max(0,u.xp+amount);const newLevel=Math.floor(Math.sqrt(u.xp/100));scheduleXpSave();if(newLevel>oldLevel){const cfg=dashboardConfig(guild.id,'levels');if(cfg.announce!==false){const channel=cfg.announceChannelId?await guild.channels.fetch(cfg.announceChannelId).catch(()=>null):sourceChannel;if(channel?.isTextBased())await channel.send({content:'🎉 '+user.toString()+' reached level '+newLevel+'!',allowedMentions:{users:[user.id]}}).catch(()=>{})}}return true}function randomMessageXp(cfg){const low=cfg.xpMin??12,high=Math.max(low,cfg.xpMax??20);return low+Math.floor(Math.random()*(high-low+1))}async function awardActivityXp(guild,user,channel){if(!guild||!user||user.bot||!featureEnabled(guild.id,'levels'))return;const g=db.xp[guild.id]||(db.xp[guild.id]={}),u=g[user.id]||(g[user.id]={xp:0,last:0});const cfg=dashboardConfig(guild.id,'levels');if(Date.now()-u.last<(cfg.cooldownSeconds??60)*1000)return;u.last=Date.now();await awardXp(guild,user,randomMessageXp(cfg),channel)}client.on('messageCreate',async m=>{if(!m.guild||m.author.bot||m.__autoModBlocked)return;await awardActivityXp(m.guild,m.author,m.channel)});client.on('interactionCreate',async i=>{if(!i.guild||!i.isChatInputCommand()||i.user.bot)return;await awardActivityXp(i.guild,i.user,i.channel)});let voiceXpCheckRunning = false;
+const voiceXpTimer = setInterval(async () => {
+  if (voiceXpCheckRunning) return;
+  voiceXpCheckRunning = true;
+  try {
+    let changed = false;
+    for(const guild of client.guilds.cache.values()){if(!featureEnabled(guild.id,'levels'))continue;const cfg=dashboardConfig(guild.id,'levels'),points=Math.max(0,Math.min(1000,Number(cfg.voiceXpPerMinute??5)));if(!points)continue;for(const channel of guild.channels.cache.values()){if(!channel.isVoiceBased?.()||channel.id===guild.afkChannelId)continue;for(const member of channel.members.values()){if(member.user.bot)continue;const g=db.xp[guild.id]||(db.xp[guild.id]={}),u=g[member.id]||(g[member.id]={xp:0,last:0});const oldLevel=Math.floor(Math.sqrt(u.xp/100));u.xp+=points;changed=true;const newLevel=Math.floor(Math.sqrt(u.xp/100));if(newLevel>oldLevel&&cfg.announce!==false){const target=cfg.announceChannelId?await guild.channels.fetch(cfg.announceChannelId).catch(()=>null):null;if(target?.isTextBased())await target.send({content:'🎉 '+member.toString()+' reached level '+newLevel+'!',allowedMentions:{users:[member.id]}}).catch(()=>{})}}}}
+    if (changed) scheduleXpSave();
+  } catch (error) {
+    console.warn('Voice XP scan failed:', error.message || error);
+  } finally {
+    voiceXpCheckRunning = false;
+  }
+}, 60000);
+voiceXpTimer.unref?.();client.on('voiceStateUpdate',async(oldS,newS)=>{if(!newS.guild||oldS.channelId===newS.channelId)return;const cfg={...db.tempvoice[newS.guild.id],...dashboardConfig(newS.guild.id,'tempVoice')};cfg.channelId=cfg.creatorChannelId||cfg.channelId;if(!featureEnabled(newS.guild.id,'tempVoice')||!cfg||newS.channelId!==cfg.channelId||!newS.member)return;try{const m=newS.member,c=await newS.guild.channels.create({name:String(cfg.nameTemplate||'{user} room').replaceAll('{user}',m.user.username).slice(0,90),userLimit:Number(cfg.defaultLimit)||0,type:ChannelType.GuildVoice,parent:cfg.categoryId||undefined,permissionOverwrites:[{id:newS.guild.roles.everyone.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.Connect]},{id:m.id,allow:cfg.ownerCanManage===false?[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.Connect]:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.Connect,PermissionFlagsBits.ManageChannels,PermissionFlagsBits.MoveMembers]},{id:client.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.Connect,PermissionFlagsBits.ManageChannels,PermissionFlagsBits.MoveMembers]}]});await m.voice.setChannel(c);const timer=setInterval(async()=>{const live=await newS.guild.channels.fetch(c.id).catch(()=>null);if(!live||!live.members.size){if(live)await live.delete().catch(()=>{});clearInterval(timer)}},30000);timer.unref?.()}catch(e){console.warn('Temp voice:',e.message)}});const giveawayPoller=setInterval(()=>processScheduledGiveaways(client).catch(e=>console.warn('Giveaway scheduler:',e.message)),30000);giveawayPoller.unref?.();const pollExpiry=setInterval(()=>processScheduledPolls(client).catch(e=>console.warn('Poll scheduler:',e.message)),30000);pollExpiry.unref?.();console.log('Community modules loaded.') }
+function getXpData(){return db.xp}function adjustXp(guildId,userId,delta){const g=db.xp[guildId]||(db.xp[guildId]={}),u=g[userId]||(g[userId]={xp:0,last:0});u.xp=Math.max(0,Number(u.xp||0)+delta);save();return u.xp}module.exports={getCommunityCommands,handleCommunityInteraction,attachCommunityModules,getXpData,adjustXp};

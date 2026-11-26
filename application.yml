@@ -1,0 +1,56 @@
+server:
+  address: 127.0.0.1
+  port: 2333
+
+lavalink:
+  server:
+    password: "${LAVALINK_PASSWORD:local-only-password-not-for-public-use}"
+    sources:
+      youtube: false
+      soundcloud: true
+      local: true
+    playerUpdateInterval: 5
+    trackStuckThresholdMs: 10000
+    bufferDurationMs: 800
+    frameBufferDurationMs: 10000
+    opusEncodingQuality: 5
+    resamplingQuality: LOW
+    gc-warnings: true
+  pluginsDir: "/app/data/lavalink-plugins"
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:e41dd95f8bd134b51e75080fb28cc805fecb431a"
+      repository: "https://maven.lavalink.dev/snapshots"
+      snapshot: true
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    remoteCipher:
+      url: "http://127.0.0.1:8001"
+      password: "${YT_CIPHER_PASSWORD}"
+      userAgent: "hardboy-discord-lavalink"
+    oauth:
+      enabled: true
+      refreshToken: "${YT_OAUTH_REFRESH_TOKEN:}"
+    clients:
+      - WEB
+      - MUSIC
+      - ANDROID_VR
+      - MWEB
+      - WEBEMBEDDED
+      - TVHTML5_SIMPLY
+      - TV
+    clientOptions:
+      MWEB:
+        playback: false
+
+logging:
+  level:
+    root: WARN
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
+    dev.lavalink.youtube.track.YoutubeAudioTrack: INFO
+    dev.lavalink.youtube.YoutubeAudioSourceManager: INFO
+    com.sedmelluq.discord.lavaplayer.tools.ExceptionTools: WARN

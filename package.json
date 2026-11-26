@@ -1,0 +1,19 @@
+{
+  "name": "discord-music-moderator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Railway-ready Discord bot with Lavalink music, moderation, dashboard, and Groq AI",
+  "main": "index.js",
+  "scripts": {
+    "start": "node start.js",
+    "check": "node --check start.js && node --check index.js && node --check dashboard.js && node --check modules.js && node --check community.js"
+  },
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.2.3",
+    "shoukaku": "4.3.0"
+  }
+}
