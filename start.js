@@ -33,28 +33,38 @@ let killTimer = null;
 
 function loadBotDefinitions() {
   const raw = String(process.env.DISCORD_BOTS || '').trim();
-  if (!raw) {
-    const token = String(process.env.DISCORD_TOKEN || '').trim();
-    if (!token) throw new Error('Add DISCORD_TOKEN, or configure multiple bots in DISCORD_BOTS.');
-    return [{ id: 'main', token, clientId: process.env.DISCORD_CLIENT_ID, guildId: process.env.DISCORD_GUILD_ID, ownerId: process.env.BOT_OWNER_ID, legacy: true }];
+  if (raw) throw new Error('DISCORD_BOTS JSON is no longer used. Add BOT_1_TOKEN, BOT_1_CLIENT_ID, BOT_2_TOKEN, BOT_2_CLIENT_ID as separate Railway variables.');
+  const token = String(process.env.DISCORD_TOKEN || '').trim();
+  if (!token) throw new Error('Add DISCORD_TOKEN for one bot, or BOT_1_TOKEN and BOT_2_TOKEN for multiple bots.');
+  const first = {
+    id: 'bot1',
+    token,
+    clientId: String(process.env.DISCORD_CLIENT_ID || '').trim() || undefined,
+    guildId: process.env.DISCORD_GUILD_ID,
+    ownerId: process.env.BOT_OWNER_ID,
+    legacy: !process.env.BOT_1_TOKEN,
+  };
+  const definitions = [];
+  const firstToken = String(process.env.BOT_1_TOKEN || first.token).trim();
+  const firstClientId = String(process.env.BOT_1_CLIENT_ID || first.clientId || '').trim();
+  if (!firstToken) throw new Error('BOT_1_TOKEN is missing.');
+  if (firstClientId && !/^\d{17,20}$/.test(firstClientId)) throw new Error('BOT_1_CLIENT_ID must be a valid Discord application ID.');
+  definitions.push({ id: 'bot1', token: firstToken, clientId: firstClientId || undefined, guildId: process.env.BOT_1_GUILD_ID || first.guildId, ownerId: process.env.BOT_1_OWNER_ID || first.ownerId, legacy: first.legacy && !process.env.BOT_1_TOKEN });
+
+  const secondToken = String(process.env.BOT_2_TOKEN || '').trim();
+  if (secondToken) {
+    const secondClientId = String(process.env.BOT_2_CLIENT_ID || '').trim();
+    if (!/^\d{17,20}$/.test(secondClientId)) throw new Error('BOT_2_CLIENT_ID is required and must be a valid Discord application ID.');
+    definitions.push({ id: 'bot2', token: secondToken, clientId: secondClientId, guildId: process.env.BOT_2_GUILD_ID || undefined, ownerId: process.env.BOT_2_OWNER_ID || undefined, legacy: false });
   }
-  let parsed;
-  try { parsed = JSON.parse(raw); }
-  catch { throw new Error('DISCORD_BOTS must contain a valid JSON array. See docs/MULTI_BOT_SETUP.md.'); }
-  if (!Array.isArray(parsed) || parsed.length < 1) throw new Error('DISCORD_BOTS must be a JSON array with at least one bot.');
-  const used = new Set();
-  return parsed.map((item, index) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('Bot #' + (index + 1) + ' must be an object.');
-    const id = String(item.id || '').trim();
-    const token = String(item.token || '').trim();
-    if (!/^[a-zA-Z0-9_-]{1,32}$/.test(id)) throw new Error('Bot #' + (index + 1) + ' needs an id using only letters, numbers, _ or - (max 32 characters).');
-    if (used.has(id)) throw new Error('Duplicate bot id in DISCORD_BOTS: ' + id);
-    used.add(id);
-    if (!token) throw new Error('Bot "' + id + '" is missing its token.');
-    const clientId = String(item.clientId || '').trim();
-    if (!/^\d{17,20}$/.test(clientId)) throw new Error('Bot "' + id + '" needs its own valid clientId (Discord application ID).');
-    return { id, token, clientId, guildId: String(item.guildId || '').trim() || undefined, ownerId: String(item.ownerId || '').trim() || undefined, legacy: false };
-  });
+  const thirdToken = String(process.env.BOT_3_TOKEN || '').trim();
+  if (thirdToken) {
+    const thirdClientId = String(process.env.BOT_3_CLIENT_ID || '').trim();
+    if (!/^\d{17,20}$/.test(thirdClientId)) throw new Error('BOT_3_CLIENT_ID is required and must be a valid Discord application ID.');
+    definitions.push({ id: 'bot3', token: thirdToken, clientId: thirdClientId, guildId: process.env.BOT_3_GUILD_ID || undefined, ownerId: process.env.BOT_3_OWNER_ID || undefined, legacy: false });
+  }
+  if (definitions.length > 3) throw new Error('This build supports up to 3 bot accounts.');
+  return definitions;
 }
 
 const bots = loadBotDefinitions();
