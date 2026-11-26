@@ -21,9 +21,11 @@ In Railway Variables, add `DISCORD_BOTS` with a JSON array. Keep each token priv
 ]
 ```
 
-Optional per-bot fields:
+Required for each bot: `clientId` must be that bot application’s numeric ID. Optional per-bot fields:
 - `guildId`: register slash commands in one test server instead of globally.
 - `ownerId`: owner account used by owner-only features.
+
+If one bot process crashes or disconnects fatally, the supervisor restarts only that worker with a backoff; the other bot workers and the shared Lavalink process keep running.
 
 The first bot in the array is the **primary bot**. It owns the existing web dashboard and birthday scheduler. Other bots run the same commands and modules but do not start another copy of the web server. The dashboard's Discord OAuth application credentials must belong to the primary bot application.
 
