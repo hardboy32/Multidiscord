@@ -183,3 +183,7 @@ npm run check
 ```
 
 The full runtime is intended for the included Docker image or Railway. `start.js` expects the Docker build to provide the compiled YouTube Cipher binary and `Lavalink.jar`; running `npm start` directly on a plain local Node.js install will stop with a missing-binary message.
+
+## Multiple Discord bots
+
+This deployment supports multiple bot accounts in one Railway service using a single shared Lavalink server. See [Multi-bot Railway setup](docs/MULTI_BOT_SETUP.md) for the `DISCORD_BOTS` configuration and resource notes.
