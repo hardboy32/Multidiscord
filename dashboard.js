@@ -2207,6 +2207,12 @@ function startDashboard(client, playFromDashboard, playSavedTrackFromDashboard, 
   return server;
 }
 function getDashboardSettings(guildId) {
-  return guildId === GUILD_ID ? settings : defaults;
+  if (guildId !== GUILD_ID) return defaults;
+  // All bot workers share one settings file; refresh it so dashboard edits propagate.
+  try {
+    const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    settings = merge(defaults, saved);
+  } catch (_) {}
+  return settings;
 }
 module.exports = { startDashboard, getDashboardSettings, applySavedBotPresence, setBotActivity };
