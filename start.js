@@ -35,21 +35,22 @@ function loadBotDefinitions() {
   const raw = String(process.env.DISCORD_BOTS || '').trim();
   if (raw) throw new Error('DISCORD_BOTS JSON is no longer used. Add BOT_1_TOKEN, BOT_1_CLIENT_ID, BOT_2_TOKEN, BOT_2_CLIENT_ID as separate Railway variables.');
   const token = String(process.env.DISCORD_TOKEN || '').trim();
-  if (!token) throw new Error('Add DISCORD_TOKEN for one bot, or BOT_1_TOKEN and BOT_2_TOKEN for multiple bots.');
+  const configuredFirstToken = String(process.env.BOT_1_TOKEN || '').trim();
+  if (!token && !configuredFirstToken) throw new Error('Add BOT_1_TOKEN for the first bot, or keep using DISCORD_TOKEN for a single bot.');
   const first = {
     id: 'bot1',
-    token,
+    token: token || configuredFirstToken,
     clientId: String(process.env.DISCORD_CLIENT_ID || '').trim() || undefined,
     guildId: process.env.DISCORD_GUILD_ID,
     ownerId: process.env.BOT_OWNER_ID,
     legacy: !process.env.BOT_1_TOKEN,
   };
   const definitions = [];
-  const firstToken = String(process.env.BOT_1_TOKEN || first.token).trim();
+  const firstToken = configuredFirstToken || first.token;
   const firstClientId = String(process.env.BOT_1_CLIENT_ID || first.clientId || '').trim();
   if (!firstToken) throw new Error('BOT_1_TOKEN is missing.');
   if (firstClientId && !/^\d{17,20}$/.test(firstClientId)) throw new Error('BOT_1_CLIENT_ID must be a valid Discord application ID.');
-  definitions.push({ id: 'bot1', token: firstToken, clientId: firstClientId || undefined, guildId: process.env.BOT_1_GUILD_ID || first.guildId, ownerId: process.env.BOT_1_OWNER_ID || first.ownerId, legacy: first.legacy && !process.env.BOT_1_TOKEN });
+  definitions.push({ id: 'bot1', token: firstToken, clientId: firstClientId || undefined, guildId: process.env.BOT_1_GUILD_ID || first.guildId, ownerId: process.env.BOT_1_OWNER_ID || first.ownerId, legacy: first.legacy && !configuredFirstToken });
 
   const secondToken = String(process.env.BOT_2_TOKEN || '').trim();
   if (secondToken) {
