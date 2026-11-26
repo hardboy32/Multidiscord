@@ -92,3 +92,10 @@ The central dashboard is the only process that binds Railway's public `PORT`. Wo
 - A bad token or worker crash does not stop healthy workers.
 - Existing single-bot data and functionality survive migration.
 - Resource caps prevent Railway memory exhaustion; actual supported bot count is reported from measurements, not guessed.
+
+
+## Implemented runtime model
+
+The runtime uses one shared Lavalink process and one Discord worker process per configured bot. Each worker creates its own Shoukaku instance and therefore receives its own Lavalink session. Lavalink's REST player endpoints are scoped by `/v4/sessions/{sessionId}/players/{guildId}`, so identical guild IDs in different sessions refer to separate players. See the [Lavalink REST API](https://lavalink.dev/api/rest).
+
+Configuration and Railway setup are documented in [MULTI_BOT_SETUP.md](./MULTI_BOT_SETUP.md). The first configured bot owns the single dashboard server; secondary workers use the shared dashboard settings file and reload it when settings are requested.
