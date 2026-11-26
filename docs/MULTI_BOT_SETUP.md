@@ -1,46 +1,28 @@
 # Multi-bot setup (Railway)
 
-This project can run multiple Discord bot accounts in one Railway service. The supervisor starts **one** YouTube Cipher service and **one** Lavalink server, then starts one isolated Node.js worker per bot. Each worker owns its Discord client, Shoukaku connection/session, music queue, and per-bot data files.
+No JSON is needed. Add these as separate Railway Variables:
 
-## Configure multiple bots
+| Variable | What to enter |
+|---|---|
+| `BOT_1_TOKEN` | Token of the first Discord bot |
+| `BOT_1_CLIENT_ID` | Application ID of the first bot |
+| `BOT_2_TOKEN` | Token of the second Discord bot |
+| `BOT_2_CLIENT_ID` | Application ID of the second bot |
 
-In Railway Variables, add `DISCORD_BOTS` with a JSON array. Keep each token private:
+The first bot is the primary bot and owns the dashboard. The second bot runs independently with its own music queue and Lavalink session. To add a third bot, use `BOT_3_TOKEN` and `BOT_3_CLIENT_ID`.
 
-```json
-[
-  {
-    "id": "hard",
-    "token": "DISCORD_BOT_TOKEN_1",
-    "clientId": "DISCORD_APPLICATION_ID_1"
-  },
-  {
-    "id": "music",
-    "token": "DISCORD_BOT_TOKEN_2",
-    "clientId": "DISCORD_APPLICATION_ID_2"
-  }
-]
-```
+Optional variables per bot:
+- `BOT_1_GUILD_ID`, `BOT_2_GUILD_ID`, `BOT_3_GUILD_ID`: test guild IDs for slash-command registration.
+- `BOT_1_OWNER_ID`, `BOT_2_OWNER_ID`, `BOT_3_OWNER_ID`: owner user IDs.
 
-Required for each bot: `clientId` must be that bot application’s numeric ID. Optional per-bot fields:
-- `guildId`: register slash commands in one test server instead of globally.
-- `ownerId`: owner account used by owner-only features.
+Keep each token private. Invite each bot application to your Discord server and grant the permissions/intents its features need.
 
-If one bot process crashes or disconnects fatally, the supervisor restarts only that worker with a backoff; the other bot workers and the shared Lavalink process keep running.
-
-The first bot in the array is the **primary bot**. It owns the existing web dashboard and birthday scheduler. Other bots run the same commands and modules but do not start another copy of the web server. The dashboard's Discord OAuth application credentials must belong to the primary bot application.
-
-When `DISCORD_BOTS` is present, it takes precedence over `DISCORD_TOKEN`. Remove `DISCORD_BOTS` to return to the original single-bot configuration using `DISCORD_TOKEN`.
+For compatibility, the old single-bot variables `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and `BOT_OWNER_ID` still work. When `BOT_1_TOKEN` is set, it takes priority for the first bot. Do not use the old `DISCORD_BOTS` JSON variable.
 
 ## Shared and isolated resources
 
 - Shared: one Lavalink process, one YouTube Cipher process, dashboard settings, and the existing dashboard port.
 - Isolated per bot: Discord client, Shoukaku session, player/queue state, warnings, community data, music panel state, and request-cleanup state.
-- Lavalink v4 stores players under a session ID. A separate Shoukaku connection per bot therefore allows two bot accounts to play in different voice channels of the same Discord server without sharing a player.
+- If a worker exits, only that worker is restarted; other bots keep running.
 
-## Important
-
-Invite every bot account to the same Discord server and grant the permissions/intents its features need. Each bot application needs its own token and application ID.
-
-Every extra bot adds memory and gateway activity. The current Railway service starts one Lavalink instance, but it still runs one Node.js worker per Discord bot. Start with two bots on a 1 GB service and watch Railway memory usage before adding more. Do not create separate Lavalink services for each bot.
-
-The existing single-bot environment variables and deployment remain supported.
+Each additional bot consumes memory and gateway resources. Start with two bots and monitor Railway memory before adding more.
